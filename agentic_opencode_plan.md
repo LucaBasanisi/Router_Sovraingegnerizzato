@@ -73,16 +73,17 @@ Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscr
 ### Step 7: 🏆 Obiettivo Finale — Swarm Dinamico (Orchestrazione Autonoma)
 > Ora creiamo un sistema in cui Flash non segue una pipeline fissa, ma **decide autonomamente in tempo reale** quali agenti specializzati attivare in base al contesto del prompt. Il grafo di esecuzione è un DAG dinamico con memoria condivisa e delega ricorsiva.
 
-- [ ] Definire un **pool di Agenti Specializzati** (es. `Sviluppatore`, `Documentatore`, `DBA_SQL`, `Revisore_Sicurezza`, `DevOps`), ognuno con il proprio system prompt e il proprio modello ottimale.
+- [x] Definire un **pool di Agenti Specializzati** (es. `Sviluppatore`, `Documentatore`, `DBA_SQL`, `Revisore_Sicurezza`, `DevOps`), ognuno con il proprio system prompt e il proprio modello ottimale. *(Fatto: pool definito in core/config.py)*
 - [ ] Implementare la **Memoria Condivisa di Sessione** (`session_store`: dizionario Python in RAM) in cui ogni agente scrive i propri risultati e legge quelli degli altri agenti completati.
-- [ ] Implementare la **fase di Orchestrazione Dinamica**: Flash riceve il prompt e risponde con un JSON strutturato:
+- [x] Implementare la **fase di Orchestrazione Dinamica**: Flash riceve il prompt e risponde con un JSON strutturato:
   ```json
   {
     "required_agents": ["developer", "security_auditor"],
     "reasoning": "Richiede codice con autenticazione"
   }
   ```
-- [ ] Il router parserizza il JSON e avvia **dinamicamente solo gli agenti richiesti** tramite `asyncio.gather`.
+  *(Fatto: implementato in core/classifier.py, che funge ora da Project Manager).*
+- [ ] Il router parserizza il JSON e avvia **dinamicamente solo gli agenti richiesti** tramite `asyncio.gather`. *(Parzialmente fatto: router.py estrae gli agenti dal JSON ma per ora esegue in ReAct solo il primary_agent in attesa dello sviluppo parallelo).*
 - [ ] Implementare la **Delega Ricorsiva**: ogni agente, dopo aver analizzato il proprio task, può emettere una nuova richiesta di delega verso un agente specializzato. Il router gestisce lo stack di chiamate ricorsive.
 - [ ] Implementare il **limite di profondità** (`max_depth = 3`) per prevenire cicli infiniti nel DAG.
 - [ ] Il Sintetizzatore (sviluppato nello Step 6) legge la `session_store` al completamento di tutti gli agenti e unisce i risultati in un'unica risposta finale coerente.
@@ -101,9 +102,9 @@ Ci sono agenti che scrivono e leggono in parallelo (asyncio.gather) sullo stesso
 - [ ] Mantenere un contatore aggregato per sessione: `{modello: {prompt_tokens, completion_tokens, costo_stimato}}`.
 - [ ] Esporre un endpoint interno `GET /stats` nel router che restituisce un **report Markdown** leggibile direttamente con `curl localhost:8080/stats` dal terminale, o interrogabile dall'interno della chat di OpenCode Go.
 
-**Principio 2 — Right-sizing (Già implementato, da consolidare)**
-- [ ] Documentare formalmente la soglia di routing (EASY→Flash, MEDIUM→Mimo, HARD→Pro) come policy FinOps, non solo come logica di classificazione.
-- [ ] Verificare periodicamente che la distribuzione reale dei tier rispecchi le aspettative (es. se il 90% delle richieste va su Pro, le soglie sono troppo permissive).
+**Principio 2 — Right-sizing (Agent-Based Routing)**
+- [x] Documentare formalmente il routing basato sugli agenti (Orchestratore/General Chat → Flash, Developer → Pro, Security → GLM-5.1, Documenter → Mimo) come policy FinOps. L'Orchestratore sceglie il modello più economico idoneo alla task.
+- [ ] Verificare periodicamente che la distribuzione reale delle chiamate agli agenti rispecchi le aspettative (es. se il 90% delle richieste va al Developer Pro, l'Orchestratore potrebbe essere troppo permissivo).
 
 **Principio 3 — Budgeting & Alerts (Tetto di Spesa)**
 - [ ] Definire un `SESSION_TOKEN_BUDGET` configurabile (es. 100.000 token per sessione).

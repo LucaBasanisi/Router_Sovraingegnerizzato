@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 import uvicorn
 
 # Importiamo i nostri componenti modulari e commentati
-from core.config import get_api_key, BASE_URL, CHAT_MODEL, CODE_MODEL, REASONING_MODEL
+from core.config import get_api_key, BASE_URL, GENERAL_CHAT_MODEL, DEVELOPER_AGENT_MODEL, DOCUMENTER_AGENT_MODEL, SECURITY_AUDITOR_MODEL
 from core.classifier import classify_prompt
 from core.agent import agentic_stream_generator_factory
 
@@ -67,16 +67,21 @@ async def chat_completions(request: Request):
     # Estraiamo l'ultimo messaggio immesso dall'utente nel terminale (l'ultimo con role "user")
     last_user_msg = extract_text_content(next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""))
     
-    # CLASSIFICAZIONE DINAMICA TIER-ROUTING (Sceglie il livello di intelligenza necessario)
-    decision = await classify_prompt(last_user_msg, API_KEY) if last_user_msg else "EASY"
+    # ORCHESTRAZIONE DINAMICA (Sceglie gli agenti necessari)
+    required_agents = await classify_prompt(last_user_msg, API_KEY) if last_user_msg else ["general_chat"]
 
-    # Selezione del motore LLM da avviare basandosi sulla classificazione (FinOps Strategy)
-    if decision == "HARD": chosen_model = REASONING_MODEL
-    elif decision == "MEDIUM": chosen_model = CODE_MODEL
-    else: chosen_model = CHAT_MODEL
+    # Al momento (Step 6/7 in corso di sviluppo) supportiamo un solo agente primario alla volta
+    # Nel futuro (Step 7) itereremo su required_agents con asyncio.gather
+    primary_agent = required_agents[0] if required_agents else "general_chat"
 
-    # Stampa sul terminale lato server il Tier scelto per scopi di monitoraggio visivo
-    logger.info(f"Tier: {decision} -> Routing to: {chosen_model}")
+    # Mappatura del modello in base all'agente richiesto
+    if primary_agent == "developer": chosen_model = DEVELOPER_AGENT_MODEL
+    elif primary_agent == "documenter": chosen_model = DOCUMENTER_AGENT_MODEL
+    elif primary_agent == "security_auditor": chosen_model = SECURITY_AUDITOR_MODEL
+    else: chosen_model = GENERAL_CHAT_MODEL
+
+    # Stampa sul terminale lato server il Ruolo scelto per scopi di monitoraggio visivo
+    logger.info(f"Required Agents: {required_agents} -> Primary Routing to: {primary_agent} ({chosen_model})")
 
     # CONFIGURAZIONE DEL CLIENT ASINCRONO
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
@@ -87,9 +92,9 @@ async def chat_completions(request: Request):
 
     # === DIVERGIMENTO DEGLI INOLTRI === #
 
-    # 1. INOLTRO AGENTICO (MODALITA' PROATTIVA - HARD)
-    # Se il modello selezionato è il REASONING_MODEL e si richiede streaming, evoca l'intelligenza asincrona multi-step.
-    if chosen_model == REASONING_MODEL and is_stream:
+    # 1. INOLTRO AGENTICO (MODALITA' PROATTIVA)
+    # Se il ruolo primario è tra quelli che richiedono un loop ReAct (agentici) e lo stream è attivo
+    if primary_agent in ["developer", "security_auditor"] and is_stream:
         return agentic_stream_generator_factory(client, chosen_model, body, messages, headers, client_cwd)
 
     # 2. INOLTRO PASSIVO (MODALITA' SPECCHIO / STANDBY - EASY/MEDIUM)

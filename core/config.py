@@ -12,11 +12,14 @@ OPENCODE_AUTH_PATH = os.path.expanduser("~/.local/share/opencode/auth.json")
 # URL base per l'API proxy di OpenCode
 BASE_URL = "https://opencode.ai/zen/go/v1"
 
-# Definizione dei modelli per i tre tier di difficoltà
-CHAT_MODEL = "deepseek-v4-flash"      # Modello per domande veloci ed EASY
-CODE_MODEL = "mimo-v2.5"              # Modello per compiti di coding intermedi (MEDIUM)
-REASONING_MODEL = "deepseek-v4-pro"   # Modello intelligente per logica agentica (HARD)
-CLASSIFIER_MODEL = "deepseek-v4-flash" # Modello economico usato solo per la classificazione iniziale
+# Modello per l'orchestrazione dinamica (Project Manager)
+ORCHESTRATOR_MODEL = "deepseek-v4-flash"
+
+# Pool di Agenti Specializzati
+GENERAL_CHAT_MODEL = "deepseek-v4-flash"   # Risponditore semplice per chiacchierate
+DEVELOPER_AGENT_MODEL = "deepseek-v4-pro"  # Ottimizzato per scrivere codice (ReAct)
+DOCUMENTER_AGENT_MODEL = "mimo-v2.5"       # Ottimizzato per spiegazioni e markdown
+SECURITY_AUDITOR_MODEL = "glm-5.1"         # Ottimizzato per analisi di vulnerabilità e edge-cases
 
 def get_api_key():
     """
