@@ -60,7 +60,7 @@ Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscr
 - [x] Inserire un limite di sicurezza (max 15 iterazioni) per evitare cicli infiniti.
 
 ### Step 5: Testing Finale e Ottimizzazione
-- [ ] Usare OpenCode Go normalmente e testare task agentici come "Crea un nuovo componente React e installa le dipendenze".
+- [x] Usare OpenCode Go normalmente e testare task agentici come "Crea un nuovo componente React e installa le dipendenze".
 
 ### Step 6: L'Azienda Virtuale (Orchestrazione Multi-Agente Statica) — *Preparazione per lo Step 7*
 > ⚠️ **Questo step non è l'obiettivo finale.** Ha come unico scopo costruire e testare l'infrastruttura parallela (streaming, sintetizzatore, fault tolerance) che servirà allo Step 7. Il pool di agenti qui è fisso e cablato nel codice: è uno step di addestramento, non il traguardo.
@@ -71,7 +71,7 @@ Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscr
 - [ ] Gestione degli Errori (Fault Tolerance): se un agente fallisce, il Sintetizzatore restituisce il lavoro completato con un avviso (es. "Codice pronto, documentazione fallita"), senza bloccare il flusso.
 
 ### Step 7: 🏆 Obiettivo Finale — Swarm Dinamico (Orchestrazione Autonoma)
-> Questo è il vero traguardo: un sistema in cui Flash non segue una pipeline fissa, ma **decide autonomamente in tempo reale** quali agenti specializzati attivare in base al contesto del prompt. Il grafo di esecuzione è un DAG dinamico con memoria condivisa e delega ricorsiva.
+> Ora creiamo un sistema in cui Flash non segue una pipeline fissa, ma **decide autonomamente in tempo reale** quali agenti specializzati attivare in base al contesto del prompt. Il grafo di esecuzione è un DAG dinamico con memoria condivisa e delega ricorsiva.
 
 - [ ] Definire un **pool di Agenti Specializzati** (es. `Sviluppatore`, `Documentatore`, `DBA_SQL`, `Revisore_Sicurezza`, `DevOps`), ognuno con il proprio system prompt e il proprio modello ottimale.
 - [ ] Implementare la **Memoria Condivisa di Sessione** (`session_store`: dizionario Python in RAM) in cui ogni agente scrive i propri risultati e legge quelli degli altri agenti completati.
@@ -87,6 +87,11 @@ Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscr
 - [ ] Implementare il **limite di profondità** (`max_depth = 3`) per prevenire cicli infiniti nel DAG.
 - [ ] Il Sintetizzatore (sviluppato nello Step 6) legge la `session_store` al completamento di tutti gli agenti e unisce i risultati in un'unica risposta finale coerente.
 - [ ] Testing con prompt complessi multi-dominio (es. "Crea un endpoint REST con autenticazione JWT e scrivi i test unitari").
+
+
+Problemi:
+Ci sono agenti che scrivono e leggono in parallelo (asyncio.gather) sullo stesso dizionario Python. Con la delega ricorsiva, un agente che lancia un sotto-agente che a sua volta scrive sulla stessa store mentre il padre sta leggendo crea race condition sottili. asyncio è single-threaded quindi tecnicamente sicuro, ma un agente che await-a una sub-chiamata può lasciar eseguire un altro coroutine nel mezzo. Serve un lock esplicito o strutturare la store come append-only con ownership per agente.
+
 
 ### Step 8: 💰 FinOps — Ottimizzazione e Controllo dei Costi
 > Applicare i principi FinOps al consumo delle API LLM: visibilità totale, uso del modello più economico sufficiente, limiti di budget e azzeramento degli sprechi.
@@ -115,7 +120,11 @@ Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscr
 - [ ] Scrivere su disco un file di log giornaliero in formato `.jsonl` (`~/.opencode-router/usage_YYYY-MM-DD.jsonl`) con ogni chiamata: timestamp, modello, token usati, costo stimato, tier assegnato.
 - [ ] (Opzionale) Creare un semplice script Python `usage_report.py` che legge i log e stampa un riepilogo settimanale di spesa e distribuzione dei tier.
 
-### Step 9: ☁️ Enterprise Over-Engineering (Cloud Native Showcase)
+
+## Step 9
+Ho 2 possibilità per lo step 9, molto probabilmente usaerò il cloud native showcase.
+
+### Enterprise Over-Engineering (Cloud Native Showcase)
 > ⚠️ **Attenzione:** Questo step è deliberatamente sovra-ingegnerizzato. L'obiettivo non è l'efficienza per un proxy locale, ma creare un **Portfolio Project** che dimostri padronanza assoluta dei paradigmi Cloud Native, architetture a microservizi e sistemi distribuiti.
 
 **Stack Tecnologico Selezionato:**
@@ -126,9 +135,83 @@ Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscr
 - **Kubernetes Locale:** K3s / K3d (Cluster K8s ultra-leggero).
 - **Deployment / IaC:** Helm (Package manager standard per K8s).
 
+
+Da rivedere un attimo: Leader election con Raft ha senso con N≥3 nodi reali; su un singolo laptop con K3d è narcisismo puro. Potresti considerare di usarlo come showcase documentato ma non funzionale, o sostituirlo con un'architettura HA su 3 container Docker che sia effettivamente dimostrabile.
+
+
 **Piano Operativo:**
 - [ ] **Microservizi con FastAPI:** Dividere il router in microservizi indipendenti (es. `API Gateway`, `Classification Service`, `Agent Worker`). Containerizzare con Docker.
 - [ ] **Event-Driven con Redis Pub/Sub:** Sostituire le chiamate `asyncio` dirette con un'architettura ad eventi. L'orchestratore pubblica su canali Redis, i worker consumano.
 - [ ] **State Management su Redis:** Salvare lo stato della conversazione e i risultati parziali degli agenti su Redis, garantendo statelessness ai worker.
 - [ ] **Leader Election con etcd:** Implementare l'elezione di un master tra i nodi dell'API Gateway per garantire High Availability.
 - [ ] **Deployment su K3d tramite Helm:** Creare i chart Helm per fare il deploy dell'intera infrastruttura sul cluster Kubernetes locale.
+
+
+
+### Hardened Production Router
+Questa è una soluzione più "realistica" e non fatta per "flexare" certe doti.
+
+Pilastro 1 — Sandboxed Tool Execution (il vero problema da risolvere)
+
+Ogni chiamata bash va eseguita in un namespace Linux isolato usa-e-getta via **bubblewrap** (`bwrap`), lo stesso sandboxing che usa Flatpak e Podman internamente. Zero daemon, zero overhead, puro kernel Linux.
+
+Aggiungi un profilo **seccomp-bpf** per bloccare le syscall pericolose a livello kernel. La whitelist minima include `read`, `write`, `open`, `execve`, `fork`, `wait`, `exit` — tutto il resto viene bloccato con `EPERM`:
+
+```python
+# Genera il profilo con seccomp-tools e passalo come file descriptor:
+# bwrap --seccomp 3 3< /etc/opencode-router/seccomp-bash.bpf ...
+```
+
+Questo trasforma `shell=True` da vulnerabilità critica a rischio residuo minimo. Un LLM che prova `rm -rf /` trova solo `/workspace`.
+
+---
+
+Pilastro 2 — Deployment con systemd Hardened
+`systemd` ha primitive di sicurezza più granulari di K3d per un servizio locale, senza overhead.
+
+---
+
+Pilastro 3 — Ottimizzazione Performance Concreta
+
+**Tre cambi misurabili, zero sovra-ingegneria:**
+
+```python
+# 1. uvloop: event loop C, ~2x più veloce dell'asyncio default
+import uvloop
+uvloop.install()  # una sola riga prima di uvicorn.run()
+
+# 2. orjson: serializzazione JSON ~3-5x più veloce di json standard
+import orjson
+# Sostituisce json.dumps() → orjson.dumps().decode()
+# Critico nell'agent loop che serializza/deserializza ad ogni step
+
+# 3. httpx AsyncClient a livello app, NON per-request (problema attuale)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.http_client = httpx.AsyncClient(
+        timeout=60.0,
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+    )
+    yield
+    await app.state.http_client.aclose()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+Il problema del client ricreato ad ogni request è invisibile con 1 utente, ma crea overhead reale nell'agent loop dove ogni step apre e chiude una connessione TLS verso l'upstream.
+
+---
+
+Pilastro 4 — Observability Reale (senza Prometheus theater)
+
+Dato che hai già progettato il log `.jsonl` nello Step 8, estendilo con **OpenTelemetry** in modalità locale: trace ogni agent loop come uno span, con i tool call come sotto-span. Costa un'unica dipendenza (`opentelemetry-sdk`) e ti dà visibilità immediata su dove il tempo viene speso, esportabile su Jaeger locale o su file.
+
+---
+
+## Confronto diretto
+
+| | Step 9 | Step 9 Alternativo |
+|---|---|---|
+| **Problema risolto** | Scale-out che non hai | Vulnerabilità reali che hai |
+| **Complessità** | etcd + K3d + Helm + Redis | bwrap + systemd + uvloop |
+| **Sicurezza** | K8s RBAC (coordinata, non sandboxing) | seccomp + namespace isolation per ogni tool call |

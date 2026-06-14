@@ -1,0 +1,204 @@
+════════════════════════════════════════════════════════════════════
+   DOMANDE DI COMPRENSIONE APPROFONDITA — OpenCode Go Agentic Router
+   Livello: Difficile. Vediamo se hai capito realmente il codice.
+════════════════════════════════════════════════════════════════════
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEZIONE A — PROTOCOLLO SSE E STREAMING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Spiega nel dettaglio il formato di un pacchetto Server-Sent Events (SSE) valido.
+   Cosa succede esattamente se un chunk manca del doppio `\n\n` finale?
+   Il client lo scarta, lo bufferizza, o va in errore?
+
+2. Nel codice, il router fa `stream=False` verso il provider LLM ma `stream=True`
+   verso il client locale. Perché questa asimmetria? Cosa succederebbe
+   concretamente se si usasse `stream=True` in entrambe le direzioni durante
+   l'agent loop? Descrivi il problema tecnico specifico che emergerebbe
+   nel parsing dei tool_calls.
+
+3. Il retry storm è stato risolto aggiungendo `data: [DONE]\n\n` alla fine.
+   Ma il problema originale era che il client interpretava la chiusura della
+   connessione come un errore di rete. Perché un client HTTP considera la
+   chiusura della connessione TCP un errore in un contesto SSE, se tecnicamente
+   una connessione che si chiude è normale? Cosa differenzia una chiusura
+   "intenzionale" da una "accidentale" nel protocollo SSE?
+
+4. Nel generatore SSE dell'agent loop, i chunk vengono emessi con `yield`.
+   Cosa succede in memoria se il client si disconnette nel mezzo dello streaming
+   (es. l'utente chiude il terminale)? Il generatore asincrono continua a girare?
+   Dove e come viene propagata la disconnessione del client in FastAPI/uvicorn?
+
+5. Il router simula l'effetto "macchina da scrivere" spezzettando la risposta
+   finale in chunk da 50 caratteri. Questo approccio ha un difetto nascosto
+   con testi che contengono caratteri multi-byte (es. emoji, caratteri cinesi,
+   accenti). Qual è il difetto e come si manifesterebbe nel client?
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEZIONE B — ARCHITETTURA E DESIGN DECISIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+6. Il CWD viene iniettato nel Bearer Token con il formato `dummy|/path/to/cwd`.
+   Questa soluzione è definita "stateless". Spiega cosa significa stateless
+   in questo contesto. Quali problemi emergerebbero se invece si fosse usato
+   un file temporaneo su disco o una variabile d'ambiente globale del processo
+   router, specialmente in ottica di scalabilità orizzontale (Step 9)?
+
+7. Il documento architecture.md chiama `router.py` un "API Controller" dopo
+   il refactoring. In termini di pattern architetturali, quale pattern specifico
+   descrive questa separazione tra Controller e moduli di dominio? Perché
+   questo pattern è particolarmente importante in vista dell'orchestrazione
+   multi-agente dello Step 7?
+
+8. Nel codice esiste questa logica: se il modello scelto è REASONING_MODEL
+   *e* `is_stream=True`, allora si usa l'agent loop. Ma cosa succede se
+   una query viene classificata HARD e il client non chiede lo streaming
+   (`stream=False`)? Traccia il percorso del codice. Il sistema funziona
+   correttamente? C'è un caso non gestito?
+
+9. La `loop_messages` nell'agent loop è una copia di `messages` che cresce
+   ad ogni iterazione. Spiega perché è necessario mantenere questa cronologia
+   separata invece di usare direttamente `messages`. Cosa succederebbe se
+   invece si modificasse `messages` in-place durante il loop?
+
+10. Perché `agentic_stream_generator_factory` è implementata come funzione
+    che ritorna una funzione (closure), invece di essere direttamente
+    una funzione asincrona che ritorna uno StreamingResponse?
+    Quale problema specifico di Python/FastAPI risolve questa struttura?
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEZIONE C — SICUREZZA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+11. Il codice usa `subprocess.run(cmd, shell=True, cwd=cwd)`.
+    Dimostra con un esempio concreto di comando bash che il parametro `cwd`
+    non è una sandbox. Esisti almeno tre vettori d'attacco distinti
+    che un LLM manipolato tramite prompt injection potrebbe sfruttare,
+    nonostante il `cwd` sia impostato.
+
+12. Con la soluzione bwrap proposta nello Step 9 alternativo, si usa
+    `--unshare-net` per isolare la rete. Ma l'agente ha spesso bisogno
+    di eseguire comandi come `npm install` o `pip install` che richiedono
+    accesso a internet. Come si risolve questa contraddizione architetturale?
+    Proponi una soluzione che mantenga l'isolamento senza rompere i workflow
+    di sviluppo legittimi.
+
+13. La chiave API viene letta da `~/.local/share/opencode/auth.json` e messa
+    in una variabile globale del processo. Descrivi almeno due scenari in cui
+    questa chiave potrebbe essere esposta accidentalmente — uno legato
+    ai log del sistema, uno legato al comportamento dell'agente stesso.
+
+14. Il classificatore, in caso di errore o timeout, fa fallback su "HARD".
+    Questa scelta ha implicazioni di sicurezza oltre che di costo. Quali?
+    Immagina uno scenario in cui un attaccante sfrutti deliberatamente
+    questo comportamento.
+
+15. `write_file_tool` crea automaticamente le directory con `os.makedirs`.
+    Se un agente riceve come argomento `path = "../../.ssh/authorized_keys"`
+    e `content = "ssh-rsa ATTACKER_KEY..."`, cosa succede esattamente?
+    Il `cwd` di bubblewrap avrebbe protetto da questo attacco?
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEZIONE D — PYTHON E ASYNCIO INTERNALS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+16. Il costrutto `for...else` di Python è usato per il retry storm prevention.
+    Spiega la semantica esatta di `for...else` in Python. In quali condizioni
+    l'`else` NON viene eseguito? Perché questa semantica è perfetta per questo
+    caso d'uso specifico rispetto a un flag booleano `completed = False`?
+
+17. Il router usa `asyncio` con FastAPI. Nel ciclo agentico, si fa
+    `await client.post(...)`. Durante questa attesa, cosa può fare
+    l'event loop di asyncio? Questo significa che il router può gestire
+    richieste di altri utenti in parallelo durante un agent loop?
+    Quali sono i limiti di questa parallelizzazione?
+
+18. `subprocess.run()` è una chiamata bloccante. Se un comando bash impiega
+    20 secondi, questo blocca l'intero event loop asyncio per 20 secondi,
+    impedendo al router di servire qualsiasi altra richiesta.
+    Come si risolve questo problema senza cambiare l'interfaccia esterna?
+    Quale primitiva asyncio è progettata esattamente per questo caso?
+
+19. Nel codice `clean_msg = {k: v for k, v in message.items() if k in
+    ["role", "content", "tool_calls"]}`. Perché è necessario filtrare
+    i campi del messaggio prima di aggiungerlo a `loop_messages`?
+    Cosa conterrebbe `message` di problematico se non venisse filtrato,
+    e come causerebbe un errore nella chiamata API successiva?
+
+20. La variabile `global API_KEY` viene usata in un contesto async con
+    potenzialmente più coroutine in esecuzione. Perché in asyncio puro
+    (senza thread) questa non è una race condition nel senso classico?
+    In quale scenario specifico (es. con uvicorn workers multipli)
+    diventerebbe invece un problema reale?
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEZIONE E — CLASSIFICATORE E ROUTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+21. L'euristica `pre_classify` controlla se il prompt è più corto di 15
+    caratteri e lo classifica EASY. Costruisci un esempio di prompt
+    di meno di 15 caratteri che dovrebbe essere classificato HARD.
+    Come modificheresti l'euristica per gestirlo senza rompere i casi EASY?
+
+22. Il classificatore LLM usa `temperature=0.0` e `max_tokens=5`.
+    Spiega perché entrambi questi parametri sono critici per la correttezza
+    del sistema. Cosa succederebbe con `temperature=0.7`?
+    Cosa succederebbe con `max_tokens=50`?
+
+23. La keyword `"tool"` nella lista `hard_keywords` forza la classificazione
+    HARD. Ma considera questa domanda utente: "Come funziona il browser
+    developer tool di Chrome?". Viene classificata HARD. Qual è il costo
+    reale di questo falso positivo nel sistema? Non solo in termini economici,
+    ma anche in termini di esperienza utente e latenza.
+
+24. In caso di errore nel classificatore LLM, il sistema fa fallback su HARD.
+    Esiste uno scenario in cui questa scelta è sbagliata anche dal punto
+    di vista funzionale (non solo del costo)? Descrivi cosa succede se
+    l'API del provider è down e arrivano 100 richieste EASY simultanee.
+
+25. Il sistema ha tre tier: EASY, MEDIUM, HARD. Ma nel codice di routing
+    in `router.py`, MEDIUM e EASY seguono lo stesso percorso (proxy passivo),
+    differendo solo nel modello scelto. Allora perché mantenere tre tier
+    invece di due? Qual è il valore architetturale del tier MEDIUM
+    in vista degli Step 6-7?
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEZIONE F — DOMANDE TRASVERSALI (LE PIÙ DIFFICILI)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+31. Il sistema usa il pattern ReAct (Reasoning + Acting). Spiega cosa
+    significa concretamente nel contesto di questo codice: dove avviene
+    il "Reasoning", dove avviene l'"Acting", e come il risultato dell'Acting
+    viene reintegrato nel Reasoning al ciclo successivo. Identifica
+    esattamente le righe di codice che implementano questo ciclo.
+
+32. Il router è posizionato come "Man-in-the-Middle" tra OpenCode Go e il
+    provider LLM. Questo crea un vettore di attacco specifico che non
+    esiste in un'architettura senza proxy. Descrivilo. Come potrebbe
+    un provider LLM malevolo (o compromesso) sfruttare la posizione
+    del router per esfiltrare la CWD dell'utente o eseguire comandi arbitrari?
+
+33. Confronta il comportamento del sistema con `max_steps=15` e un agente
+    che non trova mai la risposta vs. un agente che trova la risposta
+    all'iterazione 14. Nel secondo caso, quante chiamate HTTP totali
+    vengono fatte al provider LLM durante l'intera sessione?
+    Calcola anche il numero minimo teorico di chiamate per una risposta
+    che richiede esattamente 3 tool call.
+
+34. Il documento troubleshooting_log descrive il "doppio bug" del 400
+    Bad Request + JSON malformato. Perché il secondo bug (il JSON malformato)
+    non sarebbe mai emerso senza il primo bug (il 400 Bad Request)?
+    Descrivi la catena causale esatta che collega i due bug.
+
+35. Se dovessi spiegare l'intera architettura del sistema a un ingegnere
+    senior che non ha mai visto il codice, usando solo un'analogia con
+    un sistema fisico del mondo reale (non informatico), quale useresti?
+    Devi coprire: il classificatore, i tre tier, l'agent loop, lo streaming
+    SSE simulato, e il CWD injection. L'analogia deve reggere per tutti
+    e cinque i componenti senza contraddizioni.
