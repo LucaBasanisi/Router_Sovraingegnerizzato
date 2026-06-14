@@ -1,0 +1,134 @@
+# OpenCode Go: Agentic Proxy Plan
+
+## 1. Il Concetto Base
+Trasformare il router `router.py` da un semplice proxy di inoltro (pass-through) a un vero e proprio **Agente Autonomo**. Sfruttando la posizione "Man-in-the-Middle", il router intercetta i prompt dell'utente e avvia un ciclo di ragionamento e azione (ReAct) locale, dotando il modello LLM (come `deepseek-v4-pro`) della capacità di chiamare funzioni di sistema (Tools).
+
+## 2. Flusso di Esecuzione Architetturale
+1. **Intercettazione**: OpenCode Go invia un payload JSON a `/v1/chat/completions`.
+2. **Analisi del Contesto**: Il router estrae il prompt, gli eventuali snippet di codice e tenta di dedurre la cartella di lavoro (CWD).
+3. **Agent Loop (ReAct)**:
+   - L'LLM valuta la richiesta.
+   - L'LLM decide di invocare un Tool (es. `execute_bash`, `read_file`).
+   - Il Router esegue il Tool sul sistema locale e restituisce l'output all'LLM.
+   - Il ciclo si ripete finché l'LLM non ha una risposta definitiva.
+4. **Streaming (Keep-Alive)**: Durante i "pensieri" dell'agente, il router fa streaming di log testuali verso OpenCode Go (es. `> Eseguendo comando...`) per prevenire il timeout del client HTTP.
+5. **Risposta Finale**: Il router impacchetta la soluzione finale nell'ultimo chunk del flusso o nel JSON finale.
+
+## 3. Sfide Tecniche & Soluzioni (Design Decisions)
+- **Timeout HTTP & UI Pulita**: I loop agentici sono lenti. OpenCode Go andrà in timeout se non riceve dati. 
+  *Decisione*: Il proxy effettuerà lo streaming di un'animazione testuale continua (es. "Analisi in corso... 🤔") verso OpenCode Go senza inquinare la UI con i log reali dell'agente. Questo tiene viva la connessione HTTP mantenendo pulita la chat.
+- **Cartella di Lavoro (CWD)**: Il proxy gira in background, ignaro di dove l'utente stia eseguendo OpenCode Go.
+  *Decisione*: Verrà creato un piccolo script "wrapper" per OpenCode Go. Questo wrapper leggerà la directory corrente del terminale (`$PWD`) e la inietterà automaticamente negli header HTTP prima di inviare la richiesta al proxy.
+- **Sicurezza**: Esecuzione di codice arbitrario.
+  *Soluzione*: Modalità "Ask for Permission" opzionale o limiti hard-coded al numero di iterazioni massime (es. max_steps = 5).
+
+## 4. Decisioni Architetturali (Step 6 → 7)
+
+Le seguenti scelte definiscono l'architettura finale del sistema multi-agente:
+
+| Decisione | Scelta | Implicazione |
+|---|---|---|
+| **Comunicazione tra agenti** | Memoria Condivisa | Gli agenti leggono i risultati altrui prima di finalizzare (es. il Documentatore legge il codice dello Sviluppatore) |
+| **Selezione degli agenti** | Flash decide autonomamente | Nessuna sintassi manuale richiesta; Flash interpreta il prompt e sceglie chi chiamare |
+| **Memoria tra richieste** | Per processo (RAM) | La sessione corrisponde alla durata del router. Finché è acceso è una sessione; al riavvio si azzera |
+| **Gerarchia di delega** | Agenti ricorsivi (DAG) | Un agente può delegare sotto-task ad altri agenti specializzati, formando un grafo di esecuzione |
+
+### ⚠️ Rischio: Cicli Infiniti (Archi Ciclici nel DAG)
+Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscrittura → Sviluppatore → Revisore insoddisfatto → ...). **Soluzione obbligatoria**: implementare uno stack di esecuzione con un limite di profondità di ricorsione (es. `max_depth = 3`).
+
+## 5. Piano di Implementazione a Step
+
+### Step 1: Wrapper CWD — Sostituzione Trasparente di `opencode`
+- [ ] Creare uno script bash wrapper che legge `$PWD` e lo inietta come header HTTP (`X-Working-Directory`) in ogni richiesta verso il router.
+- [ ] Rinominare il binario originale da `opencode` a `opencode-bin`.
+- [ ] Installare il wrapper come nuovo comando `opencode` nel `PATH` (es. in `/usr/local/bin/opencode`), così l'esperienza utente rimane identica — zero friction.
+- [ ] Verificare che il router legga correttamente l'header `X-Working-Directory` e lo usi come CWD per l'agente.
+
+### Step 2: Proof of Concept (PoC) Tool Calling
+- [ ] Modificare la chiamata a `deepseek-v4-pro` nel router per supportare la sintassi di Function Calling (o tool use).
+- [ ] Implementare un singolo tool locale in Python: `run_bash_command(cmd: str) -> str` con **libertà totale di esecuzione** (nessuna whitelist).
+- [ ] La protezione è garantita da: (a) limite di iterazioni `max_steps`, (b) **log esplicito in streaming** di ogni comando eseguito direttamente nella chat (es. `🔧 Eseguendo: git status`), così l'utente è sempre consapevole.
+- [ ] Cablare l'LLM affinché possa chiamare la funzione e ricevere il risultato in risposta.
+
+### Step 3: Gestione dello Streaming (Anti-Timeout)
+- [ ] Aggiornare la funzione di stream per inviare i "pensieri" del modello (es. "Tool Call invocato...") direttamente sulla UI di OpenCode Go, formattati come Markdown.
+- [ ] Testare task lunghi (es. "fai un find di tutti i file js e contali") per verificare che OpenCode Go non chiuda la connessione.
+
+### Step 4: Refactoring in un vero Agent Loop
+- [ ] Costruire un vero loop `while not is_final_answer:` attorno alla logica.
+- [ ] Aggiungere altri tool: `read_file`, `write_file`, `list_dir`.
+- [ ] Inserire un limite di sicurezza (max 5 iterazioni) per evitare cicli infiniti.
+
+### Step 5: Testing Finale e Ottimizzazione
+- [ ] Usare OpenCode Go normalmente e testare task agentici come "Crea un nuovo componente React e installa le dipendenze".
+
+### Step 6: L'Azienda Virtuale (Orchestrazione Multi-Agente Statica) — *Preparazione per lo Step 7*
+> ⚠️ **Questo step non è l'obiettivo finale.** Ha come unico scopo costruire e testare l'infrastruttura parallela (streaming, sintetizzatore, fault tolerance) che servirà allo Step 7. Il pool di agenti qui è fisso e cablato nel codice: è uno step di addestramento, non il traguardo.
+
+- [ ] Implementare Flash come "Project Manager" per scomporre il prompt dell'utente in due task fissi: **Codice** e **Documentazione**.
+- [ ] Sfruttare `asyncio.gather` in Python per eseguire richieste in parallelo a modelli specializzati (`deepseek-v4-pro` per il codice, `minimax` o `mimo-v2.5` per i docs).
+- [ ] Sviluppare un Agente "Sintetizzatore" che unisce i risultati in un'unica risposta streaming coerente verso OpenCode Go.
+- [ ] Gestione degli Errori (Fault Tolerance): se un agente fallisce, il Sintetizzatore restituisce il lavoro completato con un avviso (es. "Codice pronto, documentazione fallita"), senza bloccare il flusso.
+
+### Step 7: 🏆 Obiettivo Finale — Swarm Dinamico (Orchestrazione Autonoma)
+> Questo è il vero traguardo: un sistema in cui Flash non segue una pipeline fissa, ma **decide autonomamente in tempo reale** quali agenti specializzati attivare in base al contesto del prompt. Il grafo di esecuzione è un DAG dinamico con memoria condivisa e delega ricorsiva.
+
+- [ ] Definire un **pool di Agenti Specializzati** (es. `Sviluppatore`, `Documentatore`, `DBA_SQL`, `Revisore_Sicurezza`, `DevOps`), ognuno con il proprio system prompt e il proprio modello ottimale.
+- [ ] Implementare la **Memoria Condivisa di Sessione** (`session_store`: dizionario Python in RAM) in cui ogni agente scrive i propri risultati e legge quelli degli altri agenti completati.
+- [ ] Implementare la **fase di Orchestrazione Dinamica**: Flash riceve il prompt e risponde con un JSON strutturato:
+  ```json
+  {
+    "required_agents": ["developer", "security_auditor"],
+    "reasoning": "Richiede codice con autenticazione"
+  }
+  ```
+- [ ] Il router parserizza il JSON e avvia **dinamicamente solo gli agenti richiesti** tramite `asyncio.gather`.
+- [ ] Implementare la **Delega Ricorsiva**: ogni agente, dopo aver analizzato il proprio task, può emettere una nuova richiesta di delega verso un agente specializzato. Il router gestisce lo stack di chiamate ricorsive.
+- [ ] Implementare il **limite di profondità** (`max_depth = 3`) per prevenire cicli infiniti nel DAG.
+- [ ] Il Sintetizzatore (sviluppato nello Step 6) legge la `session_store` al completamento di tutti gli agenti e unisce i risultati in un'unica risposta finale coerente.
+- [ ] Testing con prompt complessi multi-dominio (es. "Crea un endpoint REST con autenticazione JWT e scrivi i test unitari").
+
+### Step 8: 💰 FinOps — Ottimizzazione e Controllo dei Costi
+> Applicare i principi FinOps al consumo delle API LLM: visibilità totale, uso del modello più economico sufficiente, limiti di budget e azzeramento degli sprechi.
+
+**Principio 1 — Visibility (Visibilità)**
+- [ ] Leggere il campo `usage` (token `prompt` + `completion`) da ogni risposta dell'API e registrarlo nella `session_store`.
+- [ ] Mantenere un contatore aggregato per sessione: `{modello: {prompt_tokens, completion_tokens, costo_stimato}}`.
+- [ ] Esporre un endpoint interno `GET /stats` nel router che restituisce un **report Markdown** leggibile direttamente con `curl localhost:8080/stats` dal terminale, o interrogabile dall'interno della chat di OpenCode Go.
+
+**Principio 2 — Right-sizing (Già implementato, da consolidare)**
+- [ ] Documentare formalmente la soglia di routing (EASY→Flash, MEDIUM→Mimo, HARD→Pro) come policy FinOps, non solo come logica di classificazione.
+- [ ] Verificare periodicamente che la distribuzione reale dei tier rispecchi le aspettative (es. se il 90% delle richieste va su Pro, le soglie sono troppo permissive).
+
+**Principio 3 — Budgeting & Alerts (Tetto di Spesa)**
+- [ ] Definire un `SESSION_TOKEN_BUDGET` configurabile (es. 100.000 token per sessione).
+- [ ] Quando il budget residuo scende sotto il 20%, il router forza automaticamente il **downgrade** di tutte le richieste successive al modello Flash, indipendentemente dalla classificazione.
+- [ ] Notificare l'utente via streaming con un messaggio in chat (es. `⚠️ Budget quasi esaurito. Modalità risparmio attivata.`).
+
+**Principio 4 — Waste Elimination (Cache)**
+- [ ] Implementare una **cache in RAM** delle ultime N risposte (es. N=50), indicizzata tramite **hash esatto** del prompt normalizzato (lowercase, spazi collassati): O(1), zero dipendenze aggiuntive.
+- [ ] Prima di ogni chiamata API, calcolare l'hash del prompt e verificare se esiste già in cache.
+- [ ] Se la cache viene colpita, restituire la risposta salvata direttamente senza consumare token.
+- [ ] (Futuro) Se si volesse catturare anche prompt riformulati, aggiungere un layer di embedding semantico come fallback secondario senza riscrivere la logica principale.
+
+**Principio 5 — Reporting (Log Persistente)**
+- [ ] Scrivere su disco un file di log giornaliero in formato `.jsonl` (`~/.opencode-router/usage_YYYY-MM-DD.jsonl`) con ogni chiamata: timestamp, modello, token usati, costo stimato, tier assegnato.
+- [ ] (Opzionale) Creare un semplice script Python `usage_report.py` che legge i log e stampa un riepilogo settimanale di spesa e distribuzione dei tier.
+
+### Step 9: ☁️ Enterprise Over-Engineering (Cloud Native Showcase)
+> ⚠️ **Attenzione:** Questo step è deliberatamente sovra-ingegnerizzato. L'obiettivo non è l'efficienza per un proxy locale, ma creare un **Portfolio Project** che dimostri padronanza assoluta dei paradigmi Cloud Native, architetture a microservizi e sistemi distribuiti.
+
+**Stack Tecnologico Selezionato:**
+- **Framework Microservizi:** FastAPI (Mantiene coerenza con il codice attuale e supporta async).
+- **Message Broker (Event-Driven):** Redis Pub/Sub (Leggero e riutilizza lo stesso datastore dello stato).
+- **State Management:** Redis (Sostituisce la memoria condivisa in RAM per permettere lo scale-out).
+- **Consenso Distribuito:** etcd (Per l'elezione del Leader Orchestrator, sfruttando Raft).
+- **Kubernetes Locale:** K3s / K3d (Cluster K8s ultra-leggero).
+- **Deployment / IaC:** Helm (Package manager standard per K8s).
+
+**Piano Operativo:**
+- [ ] **Microservizi con FastAPI:** Dividere il router in microservizi indipendenti (es. `API Gateway`, `Classification Service`, `Agent Worker`). Containerizzare con Docker.
+- [ ] **Event-Driven con Redis Pub/Sub:** Sostituire le chiamate `asyncio` dirette con un'architettura ad eventi. L'orchestratore pubblica su canali Redis, i worker consumano.
+- [ ] **State Management su Redis:** Salvare lo stato della conversazione e i risultati parziali degli agenti su Redis, garantendo statelessness ai worker.
+- [ ] **Leader Election con etcd:** Implementare l'elezione di un master tra i nodi dell'API Gateway per garantire High Availability.
+- [ ] **Deployment su K3d tramite Helm:** Creare i chart Helm per fare il deploy dell'intera infrastruttura sul cluster Kubernetes locale.
