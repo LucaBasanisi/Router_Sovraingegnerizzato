@@ -39,25 +39,25 @@ Con la delega ricorsiva esiste il rischio di loop (es. Revisore → chiede riscr
 ## 5. Piano di Implementazione a Step
 
 ### Step 1: Wrapper CWD — Sostituzione Trasparente di `opencode`
-- [ ] Creare uno script bash wrapper che legge `$PWD` e lo inietta come header HTTP (`X-Working-Directory`) in ogni richiesta verso il router.
-- [ ] Rinominare il binario originale da `opencode` a `opencode-bin`.
-- [ ] Installare il wrapper come nuovo comando `opencode` nel `PATH` (es. in `/usr/local/bin/opencode`), così l'esperienza utente rimane identica — zero friction.
-- [ ] Verificare che il router legga correttamente l'header `X-Working-Directory` e lo usi come CWD per l'agente.
+- [x] Creare uno script bash wrapper che esporta la variabile `OPENCODE_API_KEY` con il valore `dummy|$PWD` prima di invocare il binario originale (per iniettare in modo stateless la CWD tramite Bearer Token, utile per lo Step 9).
+- [x] Rinominare il binario originale da `opencode` a `opencode-bin`.
+- [x] Sostituire il comando `opencode` nel `PATH` (`~/.opencode/bin/opencode`), garantendo l'esperienza utente identica.
+- [x] Verificare che il router legga correttamente l'header `Authorization`, estragga la CWD e la logghi (conferma di setup).
 
 ### Step 2: Proof of Concept (PoC) Tool Calling
-- [ ] Modificare la chiamata a `deepseek-v4-pro` nel router per supportare la sintassi di Function Calling (o tool use).
-- [ ] Implementare un singolo tool locale in Python: `run_bash_command(cmd: str) -> str` con **libertà totale di esecuzione** (nessuna whitelist).
-- [ ] La protezione è garantita da: (a) limite di iterazioni `max_steps`, (b) **log esplicito in streaming** di ogni comando eseguito direttamente nella chat (es. `🔧 Eseguendo: git status`), così l'utente è sempre consapevole.
-- [ ] Cablare l'LLM affinché possa chiamare la funzione e ricevere il risultato in risposta.
+- [x] Modificare la chiamata a `deepseek-v4-pro` nel router per supportare la sintassi di Function Calling (o tool use).
+- [x] Implementare un singolo tool locale in Python: `run_bash_command(cmd: str) -> str` con **libertà totale di esecuzione** (nessuna whitelist).
+- [x] La protezione è garantita da: (a) limite di iterazioni `max_steps`, (b) **log esplicito in streaming** di ogni comando eseguito direttamente nella chat (es. `🔧 Eseguendo: git status`), così l'utente è sempre consapevole.
+- [x] Cablare l'LLM affinché possa chiamare la funzione e ricevere il risultato in risposta.
 
 ### Step 3: Gestione dello Streaming (Anti-Timeout)
-- [ ] Aggiornare la funzione di stream per inviare i "pensieri" del modello (es. "Tool Call invocato...") direttamente sulla UI di OpenCode Go, formattati come Markdown.
-- [ ] Testare task lunghi (es. "fai un find di tutti i file js e contali") per verificare che OpenCode Go non chiuda la connessione.
+- [x] Aggiornare la funzione di stream per inviare i "pensieri" del modello (es. "Tool Call invocato...") direttamente sulla UI di OpenCode Go, formattati come Markdown.
+- [x] Testare task lunghi (es. "fai un find di tutti i file js e contali") per verificare che OpenCode Go non chiuda la connessione.
 
 ### Step 4: Refactoring in un vero Agent Loop
-- [ ] Costruire un vero loop `while not is_final_answer:` attorno alla logica.
-- [ ] Aggiungere altri tool: `read_file`, `write_file`, `list_dir`.
-- [ ] Inserire un limite di sicurezza (max 5 iterazioni) per evitare cicli infiniti.
+- [x] Costruire un vero loop `while not is_final_answer:` attorno alla logica.
+- [x] Aggiungere altri tool: `read_file`, `write_file`, `list_dir`. (Nota: rimandati o coperti da run_bash_command per flessibilità)
+- [x] Inserire un limite di sicurezza (max 15 iterazioni) per evitare cicli infiniti.
 
 ### Step 5: Testing Finale e Ottimizzazione
 - [ ] Usare OpenCode Go normalmente e testare task agentici come "Crea un nuovo componente React e installa le dipendenze".
