@@ -1,7 +1,5 @@
 # Router_Sovraingegnerizzato (OpenCode Go Agentic Proxy Router)
-Router costruito per Opencode Go (https://opencode.ai/it/go) che permette l'utilizzo multi agentico.
 
-## Cos'è
 Un Proxy Router intelligente e "Man-in-the-Middle" per OpenCode Go, capace di trasformare una normale sessione di chat LLM in un vero e proprio sistema multi-agente autonomo. Questo proxy si inserisce tra il client locale e l'API LLM (es. DeepSeek, Mimo), intercettando le richieste, classificando dinamicamente la complessità del task e permettendo all'intelligenza artificiale di agire in modo proattivo sul sistema locale dell'utente.
 
 ## Come Funziona
